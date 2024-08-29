@@ -9,7 +9,7 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader, DistributedSampler
 from torch.optim import AdamW
 import deepspeed
-
+import wandb
 import random
 import json
 from tqdm import tqdm
@@ -19,8 +19,10 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     AutoConfig,
-    mpu,
-    GenerationConfig)
+    GenerationConfig) #mpu
+
+# from .transformers.src.transformers import mpu
+import mpu
 
 from transformers import get_constant_schedule_with_warmup, get_polynomial_decay_schedule_with_warmup
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -33,7 +35,7 @@ from utils import print_rank, get_rank
 from utils import save_rank
 from utils import all_gather
 from utils import load_parallel, save_parallel
-from utils import get_tokenizer, get_model, parallel_model_map
+from utils import get_tokenizer, get_model #, parallel_model_map
 
 from accelerate import init_empty_weights
 
@@ -61,7 +63,8 @@ def get_teacher_model(args, device):
             args.teacher_model_path, 
             config=config, 
             device_map={"": device}, 
-            torch_dtype=torch.float16 if args.model_type!="qwen" else torch.bfloat16
+            torch_dtype=torch.float16 if args.model_type!="qwen" else torch.bfloat16,
+            attn_implementation='flash_attention_2',
         )
 
         if args.peft is not None and args.teacher_peft_path is not None:
@@ -162,6 +165,20 @@ def prepare_dataset(args, tokenizer):
         raise ValueError("Do train and do eval must set one")
     return data
 
+def prepare_eng_dataset(args, tokenizer):
+    data = {}
+    rng_sample = random.Random(args.seed)
+    print(args.eng_data_dir)
+    if args.do_train:
+        data["train"] = LMTrainDataset(args, tokenizer, args.eng_data_dir, "train", args.train_num, args.train_ratio, rng_sample)
+        print_rank("train num", len(data["train"]))
+        data["dev"] = LMTrainDataset(args, tokenizer, args.eng_data_dir, "valid", args.dev_num, args.dev_ratio, rng_sample)
+    elif args.do_eval:
+        data["test"] = LMTrainDataset(args, tokenizer, args.eng_data_dir, "valid", args.dev_num, args.dev_ratio, rng_sample)
+    else:
+        raise ValueError("Do train and do eval must set one")
+    return data
+
 
 def get_distil_loss(args, tokenizer, model, teacher_model, model_batch, no_model_batch, logits):
     with torch.no_grad():
@@ -227,7 +244,7 @@ def get_teacher_lm_loss(args, tokenizer, model, teacher_model, model_batch):
     return lm_loss
 
 
-def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, optimizer: AdamW, lr_scheduler, dataset, device, teacher_model=None):
+def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, optimizer: AdamW, lr_scheduler, dataset, device,eng_dataset=None, teacher_model=None):
     print_rank("Start Fine-tuning")
 
     # print_inspect(model, '*')
@@ -241,20 +258,35 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
         dp_rank = dist.get_rank()
         dp_group = None
         loss_func = nn.CrossEntropyLoss()
+    print(dp_rank)
+    if dist.get_rank() == 0:
+        run = wandb.init(project="Test Knowledge Distillation", config=args)
+        run.config.update(args)  # Update wandb config with parsed arguments
 
     sampler = DistributedSampler(dataset["train"], shuffle=True, drop_last=True, rank=dp_rank, num_replicas=dp_world_size)
     train_dataloader = DataLoader(
         dataset['train'], sampler=sampler, batch_size=args.batch_size, num_workers=args.num_workers, collate_fn=dataset["train"].collate)
-
+    eng_dataloader = DataLoader(
+        eng_dataset['train'], sampler=sampler, batch_size=args.batch_size, num_workers=args.num_workers, collate_fn=dataset["train"].collate)
     step, global_step = 1, 1
+    reg_iter = 10
     total_loss, total_distil_loss, total_time = 0.0, 0.0, 0.0
-    
+    total_iter = len(train_dataloader)*10//9
+    kor_iter = iter(train_dataloader)
+    eng_iter = iter(eng_dataloader)
     evaluate(args, tokenizer, model, dataset["dev"], "dev", 0, device)
     for epoch in range(args.epochs):
         sampler.set_epoch(epoch)
 
         model.train()
-        for it, (model_batch, no_model_batch, gen_data) in enumerate(train_dataloader):
+        for it in tqdm(range(total_iter)):
+            if it%reg_iter==reg_iter-1:
+                eng_turn=True
+                (model_batch, no_model_batch, gen_data) = next(eng_iter)
+            else:
+                eng_turn=False
+                (model_batch, no_model_batch, gen_data) = next(kor_iter)
+        # for it, (model_batch, no_model_batch, gen_data) in enumerate(tqdm(train_dataloader)):
             dataset["train"].move_to_device(model_batch, no_model_batch, gen_data, device)
             # torch.save((model_batch, no_model_batch), "mb_few.pt")
             # exit(0)
@@ -263,7 +295,6 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
 
             # if it == 0 and dist.get_rank() == 0:
             #     torch.save((model_batch, no_model_batch), os.path.join(args.save, "examples.pt"))
-
             outputs = model(**model_batch, use_cache=False)
             
             logits = outputs.logits
@@ -274,7 +305,7 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
             else:
                 lm_loss = loss_func(logits.float().view(-1, logits.shape[-1]), no_model_batch["label"].view(-1))
             
-            if teacher_model is not None:
+            if teacher_model is not None and eng_turn:
                 distil_loss = get_distil_loss(args, tokenizer, model, teacher_model, model_batch, no_model_batch, logits)
                 loss = (1 - args.kd_ratio) * lm_loss + args.kd_ratio * distil_loss
             else:
@@ -287,13 +318,18 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
             global_loss = loss.item() / dp_world_size
 
             global_distil_loss = 0
-            if teacher_model is not None:
+            if teacher_model is not None and eng_turn:
                 dist.all_reduce(distil_loss, dist.ReduceOp.SUM, group=dp_group)
                 global_distil_loss = distil_loss.item() / dp_world_size
                 total_distil_loss += global_distil_loss
-    
+
             torch.cuda.synchronize()
             elapsed_time = time.time() - st_time
+            if dist.get_rank() == 0:
+                if teacher_model is not None and eng_turn:
+                    run.log({"epoch":epoch,"step":step,"Lm Loss": loss.item(), "Distill Loss": distil_loss.item(), "learning rate": lr_scheduler.get_last_lr()[0],'micro_time':elapsed_time} )
+                else:
+                    run.log({"epoch":epoch,"step":step,"Lm Loss": loss.item(), "learning rate": lr_scheduler.get_last_lr()[0],'micro_time':elapsed_time} )
 
             total_loss += global_loss
             total_time += elapsed_time
@@ -321,6 +357,7 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
                     print_rank(get_log(global_loss, global_distil_loss, 0))
 
             if global_step % args.log_interval == 0 and step % args.gradient_accumulation_steps == 0:
+
                 log_str = get_log(
                     total_loss / (args.log_interval * args.gradient_accumulation_steps),
                     total_distil_loss / (args.log_interval * args.gradient_accumulation_steps),
@@ -362,7 +399,7 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
             
             if global_step > args.total_iters:
                 break
-            
+    wandb.finish()
     return model
 
 
@@ -417,13 +454,14 @@ def evaluate(args, tokenizer, model, dataset: LMTrainDataset, split, epoch, devi
             print_rank(f"{it}/{len(dataloader)}")
             dataset.move_to_device(model_batch, no_model_batch, gen_data, device)
             logits = model(**model_batch).logits
+            print('get logits')
             if args.model_parallel:
                 lm_losses = loss_func(logits.contiguous().float(), no_model_batch["label"]).view(-1)
                 loss_mask = no_model_batch["loss_mask"].view(-1)
                 loss = (lm_losses * loss_mask).sum(-1) / loss_mask.sum(-1)
             else:
                 loss = loss_func(logits.view(-1, logits.shape[-1]), no_model_batch["label"].view(-1))
-            
+            print('get loss')
             max_new_tokens = args.max_length - gen_data["input_ids"].size(1)
             
             if args.eval_gen:            
@@ -446,6 +484,8 @@ def evaluate(args, tokenizer, model, dataset: LMTrainDataset, split, epoch, devi
             dist.all_reduce(loss, dist.ReduceOp.SUM, group=dp_group)
             loss = loss / dp_world_size
             all_loss += loss.item()
+            del(model_batch, no_model_batch, gen_data, logits)
+            torch.cuda.empty_cache()
             step += 1
     
     if args.eval_gen:
@@ -506,10 +546,14 @@ def main():
     
     args.fp32 = not ds_config["fp16"]["enabled"]    
     args.deepspeed_config = None
-    
+
     # get the tokenizer
     tokenizer = get_tokenizer(args)
     dataset = prepare_dataset(
+        args,
+        tokenizer,
+    )
+    eng_dataset = prepare_eng_dataset(
         args,
         tokenizer,
     )
@@ -540,9 +584,10 @@ def main():
         teacher_model = get_teacher_model(args, device)
     else:
         teacher_model = None
-    
+    # Initialize wandb project
+
     if args.do_train:
-        model = finetune(args, tokenizer, model, optimizer, lr_scheduler, dataset, device, teacher_model=teacher_model)
+        model = finetune(args, tokenizer, model, optimizer, lr_scheduler, dataset, device, teacher_model=teacher_model,eng_dataset=eng_dataset)
    
     if args.do_eval:
         evaluate(args, tokenizer, model, dataset["test"], "test", 0, device)

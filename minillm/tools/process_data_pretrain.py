@@ -24,16 +24,24 @@ class Encoder(object):
         
         return token_ids, len(line)
 
-
+import json
 def main():
     args = get_args()
         
     args.processed_data_dir = os.path.join(args.processed_data_dir, numerize(args.train_num))
 
     os.makedirs(args.processed_data_dir, exist_ok=True)
-        
-    file_name = os.path.join(args.data_dir, "data.txt")
-    fin = open(file_name, "r", encoding="utf-8")
+    
+    file_dirs = os.listdir(args.data_dir)
+    fin=[]
+    for curdir in file_dirs:
+        if 'jsonl' in curdir:
+            with open(os.path.join(args.data_dir, curdir), 'r', encoding="utf-8") as f:
+                fin += [json.loads(line)['text'] for line in f.readlines()]
+    print(len(fin))
+    # fin = lines
+    # file_name = os.path.join(args.data_dir, "data.txt")
+    # fin = open(file_name, "r", encoding="utf-8")
     # encoder use the tokenizer to encode data
     encoder = Encoder(args)
 

@@ -68,6 +68,7 @@ def add_runtime_args(parser: argparse.ArgumentParser):
 def add_data_args(parser: argparse.ArgumentParser):
     group = parser.add_argument_group('data', 'data configurations')
     group.add_argument("--data-dir", type=str, default=None)
+    group.add_argument("--eng-data-dir", type=str, default=None)
     group.add_argument("--processed-data-dir", type=str, default=None)
     group.add_argument("--force-process", action="store_true")
     group.add_argument("--force-process-demo", action="store_true")

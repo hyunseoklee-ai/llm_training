@@ -16,25 +16,25 @@ from peft import get_peft_model, LoraConfig, TaskType, PeftModel
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    AutoConfig,
-    ParallelOPTForCausalLM,
-    ParallelLlamaForCausalLM,
-    ParallelGPTJForCausalLM,
-    ParallelGPT2LMHeadModel,
-    ParallelMistralForCausalLM,
-    ParallelQWenLMHeadModel,
-    mpu,)
+    AutoConfig,)
+    # ParallelOPTForCausalLM,
+    # ParallelLlamaForCausalLM,
+    # ParallelGPTJForCausalLM,
+    # ParallelGPT2LMHeadModel,
+    # ParallelMistralForCausalLM,
+    # ParallelQWenLMHeadModel,
+    # mpu,)
 
 
-parallel_model_map = {
-    "opt": ParallelOPTForCausalLM,
-    "gptj": ParallelGPTJForCausalLM,
-    "gpt2": ParallelGPT2LMHeadModel,
-    "llama": ParallelLlamaForCausalLM,
-    "llama2": ParallelLlamaForCausalLM,
-    "mistral": ParallelMistralForCausalLM,
-    "qwen": ParallelQWenLMHeadModel,
-}
+# parallel_model_map = {
+#     "opt": ParallelOPTForCausalLM,
+#     "gptj": ParallelGPTJForCausalLM,
+#     "gpt2": ParallelGPT2LMHeadModel,
+#     "llama": ParallelLlamaForCausalLM,
+#     "llama2": ParallelLlamaForCausalLM,
+#     "mistral": ParallelMistralForCausalLM,
+#     "qwen": ParallelQWenLMHeadModel,
+# }
 
 
 # Logging
@@ -158,7 +158,7 @@ def get_model(args, device):
             dtype = torch.float32 if args.fp32 else torch.float16
         else:
             dtype = torch.float32 if args.fp32 else torch.bfloat16
-        model = AutoModelForCausalLM.from_pretrained(args.model_path, config=config, device_map={"": device}, torch_dtype=dtype)
+        model = AutoModelForCausalLM.from_pretrained(args.model_path, config=config, device_map={"": device}, torch_dtype=dtype,attn_implementation='flash_attention_2',)
 
         if args.peft is not None:
             if args.peft == "lora":
@@ -166,8 +166,12 @@ def get_model(args, device):
                 if args.peft_path is not None:
                     model = PeftModel.from_pretrained(model, args.peft_path)
                 else:
+                    peft_lora_r = 16
+                    peft_lora_alpha = 32
+                    peft_lora_dropout = 0.05
+                    target_modules = ["q_proj", "v_proj"]
                     peft_config = LoraConfig(
-                        task_type=TaskType.CAUSAL_LM, inference_mode=(not args.do_train), r=args.peft_lora_r, lora_alpha=args.peft_lora_alpha, lora_dropout=args.peft_lora_dropout
+                        task_type=TaskType.CAUSAL_LM, inference_mode=(not args.do_train),target_modules = target_modules, r=peft_lora_r, lora_alpha=peft_lora_alpha, lora_dropout=peft_lora_dropout
                     )
                     model = get_peft_model(model, peft_config)
                 model.print_trainable_parameters()
@@ -190,6 +194,7 @@ def get_model(args, device):
 
 
 def get_optimizer_params(args, model: nn.Module):
+    
     # taken from https://github.com/facebookresearch/SpanBERT/blob/0670d8b6a38f6714b85ea7a033f16bd8cc162676/code/run_tacred.py
     param_optimizer = list(model.named_parameters())
     no_decay = ['bias', 'ln_f.weight', 'ln_1.weight', 'ln_2.weight', 'ln_cross_attn']
@@ -214,6 +219,7 @@ def get_optimizer_params_peft(args, model: nn.Module):
 
 
 def get_tokenizer(args):
+    print(args.model_path)
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
     if args.model_type in ["gpt2", "opt", "llama", "gptj", "llama2", "mistral"]:
         tokenizer.pad_token_id = tokenizer.eos_token_id

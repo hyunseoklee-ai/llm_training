@@ -73,10 +73,14 @@ class LMTrainDataset(Dataset):
         no_model_data["label"][i][:source_len-1] = -100
         no_model_data["loss_mask"][i][:input_len-1] = 1.0
         no_model_data["loss_mask"][i][:source_len-1] = 0
-        
-        if prompt is not None:
-            gen_data["input_ids"][i][-len(prompt):] = torch.tensor(prompt, dtype=torch.long)
-            gen_data["attention_mask"][i][-len(prompt):] = 1.0
+        # print(prompt)
+        # if prompt is not None:
+        #     print(prompt)
+        #     print(prompt.shape)
+        #     print(gen_data["input_ids"][i])
+        #     print(gen_data["input_ids"][i].shape)
+        #     gen_data["input_ids"][i][-len(prompt):] = torch.tensor(prompt, dtype=torch.long)
+        #     gen_data["attention_mask"][i][-len(prompt):] = 1.0
 
     def move_to_device(self, model_data, no_model_data, gen_data, device):
         for k in model_data:

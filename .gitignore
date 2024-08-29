@@ -6,6 +6,15 @@ __pycache__/
 # C extensions
 *.so
 
+# minillm data
+minillm/data/
+minillm/processed_data/
+minillm/checkpoints/
+minillm/results/
+minillm/wandb/
+minillm/test/
+minillm/aws*
+
 # Distribution / packaging
 .Python
 build/
