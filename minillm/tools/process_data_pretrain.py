@@ -34,10 +34,17 @@ def main():
     
     file_dirs = os.listdir(args.data_dir)
     fin=[]
+    import gzip
     for curdir in file_dirs:
-        if 'jsonl' in curdir:
-            with open(os.path.join(args.data_dir, curdir), 'r', encoding="utf-8") as f:
+        if 'jsonl.gz' in curdir:
+            print(curdir)
+            with gzip.open(os.path.join(args.data_dir, curdir), 'rt', encoding='utf-8') as f:
                 fin += [json.loads(line)['text'] for line in f.readlines()]
+        elif 'jsonl' in curdir:
+            print(curdir)
+            with open(os.path.join(args.data_dir, curdir), 'r', encoding='utf-8') as f:
+                fin += [json.loads(line)['text'] for line in f.readlines()]
+            
     print(len(fin))
     # fin = lines
     # file_name = os.path.join(args.data_dir, "data.txt")
