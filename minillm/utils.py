@@ -158,7 +158,8 @@ def get_model(args, device):
             dtype = torch.float32 if args.fp32 else torch.float16
         else:
             dtype = torch.float32 if args.fp32 else torch.bfloat16
-        model = AutoModelForCausalLM.from_pretrained(args.model_path, config=config, device_map={"": device}, torch_dtype=torch.bfloat16,attn_implementation='flash_attention_2')# ,attn_implementation='flash_attention_2',
+        # model = AutoModelForCausalLM.from_pretrained(args.model_path, config=config, device_map={"": device}, torch_dtype=torch.bfloat16,attn_implementation='flash_attention_2')# ,attn_implementation='flash_attention_2',
+        model = AutoModelForCausalLM.from_pretrained(args.model_path, config=config, device_map={"": device}, torch_dtype=torch.bfloat16)# ,attn_implementation='flash_attention_2',
 
         if args.peft is not None:
             if args.peft == "lora":

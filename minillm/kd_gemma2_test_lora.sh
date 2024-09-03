@@ -1,8 +1,9 @@
 #! /bin/bash
 
-MASTER_ADDR=localhost
-MASTER_PORT=${2-2012}
-NNODES=1
+# MASTER_ADDR=localhost
+MASTER_ADDR="172.31.76.167"
+MASTER_PORT=15000
+NNODES=2
 NODE_RANK=0
 GPUS_PER_NODE=8
 
@@ -11,11 +12,12 @@ DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE \
                   --node_rank $NODE_RANK \
                   --master_addr $MASTER_ADDR \
                   --master_port $MASTER_PORT "
+#        "zero_hpz_partition_size": 8,
 
 # " --deepspeed_config ${BASE_PATH}/configs/deepspeed/deepspeed_zero3.yaml"
 
 # model
-BASE_PATH="/opt/dlami/nvme/llm_training/minillm"
+BASE_PATH="/opt/dlami/nvme/experiment/llm_training/minillm"
 # CKPT_NAME="gemma"
 # CKPT="${BASE_PATH}/test/${CKPT_NAME}/"
 CKPT_NAME="meta-llama/Meta-Llama-3.1-8B"
@@ -27,10 +29,10 @@ TEACHER_CKPT_NAME="meta-llama/Meta-Llama-3.1-8B"
 TEACHER_CKPT="${TEACHER_CKPT_NAME}"
 TEACHER_PEFT_CKPT_NAME="lora-2B"
 TEACHER_PEFT_CKPT="${BASE_PATH}/results/llama/train/${TEACHER_PEFT_CKPT_NAME}/"
-MP_SIZE=2
+
 # data
-DATA_DIR="/opt/dlami/nvme/data_llama/korean/2B/"
-ENG_DATA_DIR="/opt/dlami/nvme/data_llama/english/2B/"
+DATA_DIR="/opt/dlami/nvme/experiment/llm_training/minillm/processed_data/newnewnew/english/8192/10B/"
+ENG_DATA_DIR="/opt/dlami/nvme/experiment/llm_training/minillm/processed_data/newnewnew/english/8192/10B/"
 # hp
 BATCH_SIZE=1
 LR=0.00001
@@ -97,7 +99,7 @@ OPTS+=" --seed ${SEED}"
 # deepspeed
 OPTS+=" --deepspeed"
 # OPTS+=" --deepspeed_config ${BASE_PATH}/configs/deepspeed/ds_config.json"
-OPTS+=" --deepspeed_config ${BASE_PATH}/configs/deepspeed/ds_config_zero3.json"
+OPTS+=" --deepspeed_config ${BASE_PATH}/configs/deepspeed/ds_config_zero3_multi.json"
 
 # type
 OPTS+=" --type kd"
@@ -129,3 +131,21 @@ ${CMD}
     # //     "hysteresis": 2,
     # //     "min_loss_scale": 1
     # // },
+
+    # "autotuning": {
+    #     "enabled": false,
+    #     "results_dir": "autotuning_results",
+    #     "exps_dir": "autotuning_exps",
+    #     "overwrite": false,
+    #     "metric": "throughput",
+    #     "start_profile_step": 3,
+    #     "end_profile_step": 5,
+    #     "fast": true,
+    #     "max_train_batch_size": null,
+    #     "mp_size": 8,
+    #     "num_tuning_micro_batch_sizes": 1,
+    #     "tuner_type": "model_based",
+    #     "tuner_early_stopping": 5,
+    #     "tuner_num_trials": 50,
+    #     "arg_mappings": null
+    # },

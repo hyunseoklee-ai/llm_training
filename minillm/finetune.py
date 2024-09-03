@@ -65,14 +65,14 @@ def get_teacher_model(args, device):
             device_map={"": device}, 
             torch_dtype=torch.bfloat16,
             # torch_dtype=torch.float16 if args.model_type!="qwen" else torch.bfloat16,
-            attn_implementation='flash_attention_2',
+            # attn_implementation='flash_attention_2',
         )
         # ds_config_inf = {"train_batch_size": args.batch_size, "fp16": {"enabled": True}, "hybrid_engine": {"enabled": True}}
         # model, *_ = deepspeed.initialize(model=model, config=ds_config_inf)
-        model = deepspeed.init_inference(model, dtype=torch.float16,
-                                    mp_size=8,
-                                    # replace_with_kernel_inject=args.use_kernel,
-                                    max_tokens=4096)
+        # model = deepspeed.init_inference(model, dtype=torch.bfloat16,
+        #                             mp_size=8,
+        #                             # replace_with_kernel_inject=args.use_kernel,
+        #                             max_tokens=4096)
         if args.peft is not None and args.teacher_peft_path is not None:
             if args.peft == "lora":
                 model = PeftModel.from_pretrained(model, args.peft_path)
@@ -300,35 +300,41 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
             dataset["train"].move_to_device(model_batch, no_model_batch, gen_data, device)
             # torch.save((model_batch, no_model_batch), "mb_few.pt")
             # exit(0)
+            # print('before sync')
             torch.cuda.synchronize()
             st_time = time.time()
-
+            print('after sync')
             # if it == 0 and dist.get_rank() == 0:
             #     torch.save((model_batch, no_model_batch), os.path.join(args.save, "examples.pt"))
             outputs = model(**model_batch, use_cache=False)
             logits = outputs.logits
+            print('before loss')
             if args.model_parallel:
                 lm_losses = loss_func(logits.contiguous().float(), no_model_batch["label"]).view(-1)
                 loss_mask = no_model_batch["loss_mask"].view(-1)
                 lm_loss = (lm_losses * loss_mask).sum(-1) / loss_mask.sum(-1)
             else:
                 lm_loss = loss_func(logits.float().view(-1, logits.shape[-1]), no_model_batch["label"].view(-1))
-            
+            # print('before distil loss')
             if teacher_model is not None and eng_turn:
                 distil_loss = get_distil_loss(args, tokenizer, model, teacher_model, model_batch, no_model_batch, logits)
                 loss = (1 - args.kd_ratio) * lm_loss + args.kd_ratio * distil_loss
             else:
                 loss = lm_loss
-                
+            print('before backward')
             model.backward(loss)
+            print('before step')
             model.step()
+            print('after step')
             
+            # dist.all_reduce(loss, dist.ReduceOp.SUM, group=dp_group)
             dist.all_reduce(loss, dist.ReduceOp.SUM, group=dp_group)
             global_loss = loss.item() / dp_world_size
 
             global_distil_loss = 0
             if teacher_model is not None and eng_turn:
-                dist.all_reduce(distil_loss, dist.ReduceOp.SUM, group=dp_group)
+                # dist.all_reduce(distil_loss, dist.ReduceOp.SUM, group=dp_group)
+                dist.all_reduce(distil_loss, dist.ReduceOp.SUM)
                 global_distil_loss = distil_loss.item() / dp_world_size
                 total_distil_loss += global_distil_loss
 

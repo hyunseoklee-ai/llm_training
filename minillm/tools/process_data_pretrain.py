@@ -9,6 +9,8 @@ from data_utils.indexed_dataset import make_builder
 from transformers import AutoTokenizer
 from arguments import get_args
 
+import glob
+
 
 # 1. Implement an Encoder, which gives it a line of input data and it returns you the tokenized result.
 class Encoder(object): 
@@ -32,17 +34,22 @@ def main():
 
     os.makedirs(args.processed_data_dir, exist_ok=True)
     
-    file_dirs = os.listdir(args.data_dir)
+    # file_dirs = os.listdir(args.data_dir)
+    file_dirs = [name for name in glob.glob(args.data_dir + '/**/*jsonl*', recursive=True)]
     fin=[]
     import gzip
+    file_dirs = [file_dirs[0]]
+    print(f"Files: {len(file_dirs)}")
     for curdir in file_dirs:
         if 'jsonl.gz' in curdir:
-            print(curdir)
-            with gzip.open(os.path.join(args.data_dir, curdir), 'rt', encoding='utf-8') as f:
+            # print(curdir)
+            # with gzip.open(os.path.join(args.data_dir, curdir), 'rt', encoding='utf-8') as f:
+            with gzip.open(curdir, 'rt', encoding='utf-8') as f:
                 fin += [json.loads(line)['text'] for line in f.readlines()]
         elif 'jsonl' in curdir:
-            print(curdir)
-            with open(os.path.join(args.data_dir, curdir), 'r', encoding='utf-8') as f:
+            # print(curdir)
+            # with open(os.path.join(args.data_dir, curdir), 'r', encoding='utf-8') as f:
+            with open(curdir, 'r', encoding='utf-8') as f:
                 fin += [json.loads(line)['text'] for line in f.readlines()]
             
     print(len(fin))
